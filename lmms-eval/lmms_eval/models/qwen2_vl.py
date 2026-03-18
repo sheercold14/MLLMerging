@@ -251,6 +251,14 @@ class Qwen2_VL(lmms):
             else:
                 inputs = inputs.to(self.device)
 
+            # Keep token indices integer-typed after moving the batch to device.
+            # Some processor/batch conversions end up promoting them to float,
+            # which then crashes in the embedding lookup.
+            if "input_ids" in inputs:
+                inputs["input_ids"] = inputs["input_ids"].long()
+            if "attention_mask" in inputs:
+                inputs["attention_mask"] = inputs["attention_mask"].long()
+
             if "max_new_tokens" not in gen_kwargs:
                 gen_kwargs["max_new_tokens"] = 128
             if "temperature" not in gen_kwargs:

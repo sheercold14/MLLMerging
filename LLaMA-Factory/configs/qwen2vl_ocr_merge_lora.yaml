@@ -1,0 +1,14 @@
+### Merge LoRA adapter back into base model
+### Usage: llamafactory-cli export configs/qwen2vl_ocr_merge_lora.yaml
+
+model_name_or_path: Qwen/Qwen2-VL-7B
+adapter_name_or_path: saves/qwen2vl-7b-ocr/lora/sft
+template: qwen2_vl
+finetuning_type: lora
+trust_remote_code: true
+
+### export
+export_dir: saves/qwen2vl-7b-ocr/merged
+export_size: 5
+export_device: cpu
+export_legacy_format: false

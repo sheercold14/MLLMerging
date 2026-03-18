@@ -1,0 +1,55 @@
+# ===== Model checkpoints & weights =====
+**/saves/
+**/checkpoint-*/
+**/merged_model*/
+*.safetensors
+*.bin
+*.pt
+*.pth
+*.ckpt
+
+# ===== Training artifacts =====
+*.log
+**/logs/
+**/wandb/
+**/runs/
+**/outputs/
+
+# ===== Large data files =====
+/LMUData/*
+/LMUData/
+VLMEvalKit/LMUData/
+LLaMA-Factory/data/llavar_ocr.json
+LLaMA-Factory/data/textvqa_ocr.json
+LLaMA-Factory/data/stvqa_ocr.json
+LLaMA-Factory/data/ocrvqa_ocr.json
+LLaMA-Factory/data/textcaps_ocr.json
+LLaMA-Factory/data/synthdog_ocr.json
+LLaMA-Factory/data/docvqa_ocr.json
+LLaMA-Factory/data/tabfact_ocr.json
+LLaMA-Factory/data/deepform_ocr.json
+LLaMA-Factory/data/klc_ocr.json
+
+# ===== Python =====
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+*.egg
+dist/
+build/
+.eggs/
+
+# ===== IDE & OS =====
+.vscode/
+.idea/
+.DS_Store
+*.swp
+*.swo
+*~
+.ipynb_checkpoints/
+
+# ===== Env & cache =====
+.env
+.env.local
+**/.cache/
