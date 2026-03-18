@@ -758,13 +758,13 @@ def wudi_merging2(merged_model: nn.Module, models_to_merge: list, exclude_param_
     
     return merged_params
 
-def merge_models(merge_method="wudi2", scaling_coefficient = 0.1):
+def merge_models(merge_method="wudi2", scaling_coefficient = 0.1, merged_model_name='default_merged_model', merged_list=[]):
     print("Start merging models...")
     base_model = models['a'].cuda()
     base_state_dict = base_model.state_dict()
 
     models_to_merge = []
-    for k in ['b', 'c', 'd', 'e', 'f']:
+    for k in merged_list:
         model = models[k].cuda()
         models_to_merge.append(model)
     
@@ -871,7 +871,7 @@ def merge_models(merge_method="wudi2", scaling_coefficient = 0.1):
     base_model.load_state_dict(base_state_dict)
     base_model = base_model.cuda()
 
-    output_path = 'merged_model_name'
+    output_path = merged_model_name
     print(f"Saving model to {output_path}")
     base_model.save_pretrained(output_path)
     tokenizer.save_pretrained(output_path)
@@ -898,7 +898,7 @@ models = {
     'e': AutoModel.from_pretrained(path_e, torch_dtype=torch.float16, trust_remote_code=True).eval(),
     'f': AutoModel.from_pretrained(path_f, torch_dtype=torch.float16, trust_remote_code=True).eval(),
 }
-model = merge_models()
+model = merge_models(merged_model_name='merged_exclude_ocr', merged_list=['c', 'd', 'e', 'f'])
 #####################################################################
 # set the max number of tiles in `max_num`
 pixel_values = load_image('./examples/image1.jpg', max_num=12).to(torch.float16).cuda()
