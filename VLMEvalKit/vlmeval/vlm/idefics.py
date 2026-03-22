@@ -4,7 +4,7 @@ import warnings
 from .base import BaseModel
 from ..smp import splitlen, listinstr
 from PIL import Image
-from transformers import AutoProcessor, AutoModelForVision2Seq
+from transformers import AutoProcessor
 from transformers.image_utils import load_image
 
 
@@ -67,6 +67,12 @@ class IDEFICS2(BaseModel):
         if 'Idefics3' in self.model_path.lower():
             warnings.warn('Install transfomers from source: PR https://github.com/open-compass/VLMEvalKit/pull/379')
             warnings.warn('Reference: https://huggingface.co/HuggingFaceM4/Idefics3-8B-Llama3')
+        try:
+            from transformers import AutoModelForVision2Seq
+        except ImportError as exc:
+            raise ImportError(
+                'IDEFICS2 requires a transformers build that provides AutoModelForVision2Seq.'
+            ) from exc
         self.processor = AutoProcessor.from_pretrained(model_path)
         model = AutoModelForVision2Seq.from_pretrained(
             model_path,
