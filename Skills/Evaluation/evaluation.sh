@@ -2,7 +2,7 @@
 set -euo pipefail
 
 export LMUData=/data/lishichao/project/era-2026/MLLMerging/LMUData
-export CUDA_VISIBLE_DEVICES=0,1,2
+export CUDA_VISIBLE_DEVICES=0,1
 export OPENAI_API_KEY="${OPENAI_API_KEY}"
 
 
@@ -13,18 +13,24 @@ source /home/lishichao/miniconda3/etc/profile.d/conda.sh
 conda activate /data/lishichao/env/eval-kit
 
 cd /data/lishichao/project/era-2026/MLLMerging/VLMEvalKit
-
+MASTER_PORT="$(python - <<'PY'
+import socket
+with socket.socket() as sock:
+    sock.bind(("", 0))
+    print(sock.getsockname()[1])
+PY
+)"
 # IMPORTANT:
 # --model must be a model name registered in vlmeval/config.py, not a filesystem path.
 # If you want to evaluate a local model path, first add a corresponding entry in vlmeval/config.py.
 
 #   --data MathVista_MINI MathVision_MINI TextVQA_VAL OCRVQA_TESTCORE VizWiz GQA_TestDev_Balanced ChartQA_TEST \
-
-MODEL_NAME="Qwen2-VL-7B-Instruct"
+# -- reuse
+MODEL_NAME="merge_exclude_ocr"
 PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
-torchrun --nproc-per-node=3 run.py \
-  --data MathVista_MINI MathVision_MINI \
+torchrun --master-port "${MASTER_PORT}" --nproc-per-node=2 run.py \
+  --data MathVista_MINI MathVision_MINI TextVQA_VAL OCRVQA_TESTCORE VizWiz GQA_TestDev_Balanced ChartQA_TEST \
   --model "${MODEL_NAME}" \
-  --verbose \
   --reuse \
-  --judge gpt-4-turbo
+  --verbose \
+  --judge gpt-4o-mini

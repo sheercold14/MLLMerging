@@ -641,12 +641,12 @@ def wudi_merging2(merged_model: nn.Module, models_to_merge: list, exclude_param_
     
     return merged_params
 
-def merge_models(merge_method="wudi2", scaling_coefficient = 1.0):
+def merge_models(merge_method="wudi2", scaling_coefficient = 1.0,  merged_model_name='default_merged_model', merged_list=[]):
     print("Start merging models...")
     base_model = models['a']#.cuda()
     base_state_dict = base_model.state_dict()
     models_to_merge = []
-    for k in ['b', 'c', 'd', 'e', 'f']:
+    for k in merged_list:
         model = models[k]#.cuda()
         models_to_merge.append(model)
     
@@ -753,7 +753,7 @@ def merge_models(merge_method="wudi2", scaling_coefficient = 1.0):
     base_model.load_state_dict(base_state_dict)
     base_model = base_model.cuda()
 
-    output_path = 'merged_model_name'
+    output_path = '/data/lishichao/data/model/Qwen_merged/merged_exclude_ocr'
     print(f"Saving model to {output_path}")
     base_model.save_pretrained(output_path)
     processor.save_pretrained(output_path)
@@ -764,12 +764,12 @@ def merge_models(merge_method="wudi2", scaling_coefficient = 1.0):
     return base_model
 
 #####################################################################
-path_a = 'Qwen/Qwen2-VL-7B'
-path_b = 'yongxianwei/Qwen2-VL-7B-OCR'
-path_c = 'yongxianwei/Qwen2-VL-7B-VQA'
-path_d = 'yongxianwei/Qwen2-VL-7B-Geometry'
-path_e = 'yongxianwei/Qwen2-VL-7B-Chart'
-path_f = 'yongxianwei/Qwen2-VL-7B-Grounding'
+path_a = '/data/lishichao/data/model/Qwen2-VL-7B'
+path_b = '/data/lishichao/data/model/Qwen2-VL-7B-OCR'
+path_c = '/data/lishichao/data/model/Qwen2-VL-7B-VQA'
+path_d = '/data/lishichao/data/model/Qwen2-VL-7B-Geometry'
+path_e = '/data/lishichao/data/model/Qwen2-VL-7B-Chart'
+path_f = '/data/lishichao/data/model/Qwen2-VL-7B-Grounding'
 
 processor = AutoProcessor.from_pretrained(path_a)
 models = {
@@ -780,7 +780,8 @@ models = {
     'e': Qwen2VLForConditionalGeneration.from_pretrained(path_e, torch_dtype=torch.float16, trust_remote_code=True).eval(),
     'f': Qwen2VLForConditionalGeneration.from_pretrained(path_f, torch_dtype=torch.float16, trust_remote_code=True).eval(),
 }
-model = merge_models()
+model = merge_models(merged_model_name='merged_exclude_ocr', merged_list=['c', 'd', 'e', 'f'])
+
 #####################################################################
 # Set example image paths
 image_path1 = 'examples/image1.jpg'

@@ -392,8 +392,24 @@ qwen2vl_series = {
     'merge_iso': partial(Qwen2VLChat, model_path='/efs/wyx/LLaMA-Factory/merged_model_iso/', min_pixels=256*28*28, max_pixels=1280*28*28),
     'merge_wudi': partial(Qwen2VLChat, model_path='/efs/wyx/LLaMA-Factory/merged_model_wudi/', min_pixels=256*28*28, max_pixels=1280*28*28),
     'merge_ours': partial(Qwen2VLChat, model_path='/efs/wyx/LLaMA-Factory/merged_model_ours/', min_pixels=256*28*28, max_pixels=1280*28*28),
-    'Qwen2-VL-7B-OCR': partial(Qwen2VLChat, model_path='/data/lishichao/data/model/Qwen2-VL-7B-OCR', min_pixels=256*28*28, max_pixels=1280*28*28),
-    'Qwen2-VL-7B': partial(Qwen2VLChat, model_path='', min_pixels=256*28*28, max_pixels=1280*28*28),
+    
+    'merge_exclude_vqa': partial(Qwen2VLChat, model_path='/data/lishichao/data/model/Qwen_merged/merged_exclude_vqa', chat_template='instruct', min_pixels=256*28*28, max_pixels=1280*28*28),
+    'merge_exclude_ocr': partial(Qwen2VLChat, model_path='/data/lishichao/data/model/Qwen_merged/merged_exclude_ocr', chat_template='instruct', min_pixels=256*28*28, max_pixels=1280*28*28),
+    
+    
+    'merge_all_try2': partial(Qwen2VLChat, model_path='/data/lishichao/data/model/Qwen_merged/Qwen_merged_all', min_pixels=256*28*28, max_pixels=1280*28*28),
+    'merge_all_base_template': partial(Qwen2VLChat, model_path='/data/lishichao/data/model/Qwen_merged/Qwen_merged_all', chat_template='base', min_pixels=256*28*28, max_pixels=1280*28*28),
+    'merge_all_instruct_template': partial(Qwen2VLChat, model_path='/data/lishichao/data/model/Qwen_merged/Qwen_merged_all', chat_template='instruct', min_pixels=256*28*28, max_pixels=1280*28*28),
+    'merge_all_0321': partial(Qwen2VLChat, model_path='/data/lishichao/data/model/Qwen_merged/merged_all_0321', chat_template='instruct', min_pixels=256*28*28, max_pixels=1280*28*28),
+    
+    'Qwen2-VL-7B-zOCR': partial(Qwen2VLChat, model_path='/data/lishichao/data/model/Qwen2-VL-7B-OCR', min_pixels=256*28*28, max_pixels=1280*28*28),
+    'Qwen2-VL-7B-OCR-base-template': partial(Qwen2VLChat, model_path='/data/lishichao/data/model/Qwen2-VL-7B-OCR', chat_template='base', min_pixels=256*28*28, max_pixels=1280*28*28),
+    'Qwen2-VL-7B-OCR-instruct-template': partial(Qwen2VLChat, model_path='/data/lishichao/data/model/Qwen2-VL-7B-OCR', chat_template='instruct', min_pixels=256*28*28, max_pixels=1280*28*28),
+    
+    'Qwen2-VL-7B-Geometry': partial(Qwen2VLChat, model_path='/data/lishichao/data/model/Qwen2-VL-7B-Geometry_pre', chat_template='instruct', min_pixels=256*28*28, max_pixels=1280*28*28),
+    'Qwen2-VL-7B-Chart': partial(Qwen2VLChat, model_path='/data/lishichao/data/model/Qwen2-VL-7B-Chart', chat_template='instruct', min_pixels=256*28*28, max_pixels=1280*28*28),
+    
+    'Qwen2-VL-7B': partial(Qwen2VLChat, model_path='/data/lishichao/data/model/Qwen2-VL-7B', min_pixels=256*28*28, max_pixels=1280*28*28),
     'Qwen2-VL-7B-Pokemon': partial(Qwen2VLChat, model_path='/efs/wyx/models/Qwen2-VL-7B-Pokemon-merge', min_pixels=256*28*28, max_pixels=1280*28*28),
     'Qwen2-VL-7B-GRPO': partial(Qwen2VLChat, model_path='/efs/wyx/models/Qwen2-VL-7B-GRPO-8k', min_pixels=256*28*28, max_pixels=1280*28*28),
     'Qwen2-VL-7B-olmOCR': partial(Qwen2VLChat, model_path='/efs/wyx/models/olmOCR-7B-0225-preview', min_pixels=256*28*28, max_pixels=1280*28*28),
