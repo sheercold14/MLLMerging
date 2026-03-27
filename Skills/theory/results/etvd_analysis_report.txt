@@ -1,0 +1,187 @@
+================================================================================
+ETVD FOUNDATIONAL ANALYSIS REPORT
+Generated: 2026-03-22 16:24:34
+================================================================================
+
+Base Model: OpenGVLab/InternVL2_5-1B
+Experts: OCR, VQA, Geometry, Chart, Grounding
+Exclude patterns: ['vision_model.*', '.*lm_head.*', '.*norm.*', '.*embed_tokens.*', '.*bias.*']
+Occupancy threshold: 0.2
+
+------------------------------------------------------------
+1. ENSEMBLE SVD ANALYSIS
+------------------------------------------------------------
+Total 2D weight layers analyzed: 170
+Total basis directions (5 per layer): 850
+
+Direction Type Distribution:
+  unique      :   733 ( 86.2%)
+  shared      :    51 (  6.0%)
+  conflict    :    66 (  7.8%)
+  zero        :     0 (  0.0%)
+
+Mean occupancy: 1.156
+Median occupancy: 1.000
+Mean sign consistency: 0.9639
+
+Occupancy histogram:
+  0 experts: 0 directions
+  1 experts: 733 directions
+  2 experts: 103 directions
+  3 experts: 12 directions
+  4 experts: 2 directions
+  5 experts: 0 directions
+
+INTERPRETATION:
+  - 86.2% of directions are UNIQUE to single experts
+    -> These represent task-specific knowledge that should be preserved
+  - 6.0% of directions are SHARED (sign-consistent across experts)
+    -> These are candidates for over-accumulation under naive sum
+  - 7.8% of directions show SIGN CONFLICT
+    -> These represent destructive interference between experts
+
+------------------------------------------------------------
+2. PAIRWISE INTERFERENCE ANALYSIS
+------------------------------------------------------------
+
+Cosine Similarity Matrix (aggregated):
+                 OCR         VQA    Geometry       Chart   Grounding
+       OCR      1.0000      0.0309      0.0036      0.0167      0.1411
+       VQA      0.0309      1.0000      0.0032      0.0108      0.0320
+  Geometry      0.0036      0.0032      1.0000      0.0076      0.0025
+     Chart      0.0167      0.0108      0.0076      1.0000      0.0097
+  Grounding      0.1411      0.0320      0.0025      0.0097      1.0000
+
+Most similar pairs:
+  OCR <-> Grounding: cos=0.1411
+  VQA <-> Grounding: cos=0.0320
+  OCR <-> VQA: cos=0.0309
+Least similar pairs:
+  OCR <-> Geometry: cos=0.0036
+  VQA <-> Geometry: cos=0.0032
+  Geometry <-> Grounding: cos=0.0025
+
+Sign Conflict Rate Matrix:
+                 OCR         VQA    Geometry       Chart   Grounding
+       OCR      0.0000      0.4756      0.4972      0.4867      0.3895
+       VQA      0.4756      0.0000      0.4975      0.4914      0.4746
+  Geometry      0.4972      0.4975      0.0000      0.4939      0.4980
+     Chart      0.4867      0.4914      0.4939      0.0000      0.4923
+  Grounding      0.3895      0.4746      0.4980      0.4923      0.0000
+
+Expert L2 Norms (task vector magnitude):
+  OCR: 21.6437
+  VQA: 27.3082
+  Geometry: 16.0933
+  Chart: 15.1817
+  Grounding: 12.8281
+
+Pairwise STI Matrix (normalized, subspace overlap weighted by singular values):
+                 OCR         VQA    Geometry       Chart   Grounding
+       OCR      0.0000      1.0000      0.4559      0.6868      0.6883
+       VQA      1.0000      0.0000      0.4974      0.6253      0.7092
+  Geometry      0.4559      0.4974      0.0000      0.5365      0.3491
+     Chart      0.6868      0.6253      0.5365      0.0000      0.4716
+  Grounding      0.6883      0.7092      0.3491      0.4716      0.0000
+
+INTERPRETATION:
+  Cosine Similarity:
+  - Highest: OCR <-> Grounding (0.1411)
+    -> These experts modify parameters in similar directions
+  - Lowest: Geometry <-> Grounding (0.0025)
+    -> Most independent/orthogonal pair
+
+  STI (subspace overlap):
+  - Highest: OCR <-> VQA (STI=1.0000)
+    -> Most overlapping singular vector subspaces
+  - Lowest: Geometry <-> Grounding (STI=0.3491)
+    -> Most independent subspaces
+
+  Sign Conflict:
+  - OCR<->Grounding has lowest conflict rate (0.3895), matching their
+    high cosine similarity -- they share coherent parameter modifications
+  - Most pairs have conflict rate near 0.5, indicating near-random sign alignment
+    -- consistent with mostly orthogonal task vectors
+
+CONNECTION TO EXPERIMENTAL OBSERVATIONS:
+  From the exclude-one ablation experiments in the theory document:
+  - OCR has the 2nd largest norm (21.64) and highest cosine with Grounding
+    (0.1411). Removing OCR improved MathVision by +4.6 points,
+    suggesting OCR's large-magnitude task vector interferes with math-related
+    directions even though global cosine is low.
+  - VQA has the largest norm (27.31), dominating the merged vector.
+    Removing VQA caused GQA to drop (55.54 vs 57.14), confirming VQA's
+    unique contribution to general VQA benchmarks.
+  - Grounding has the smallest norm (12.83) and removing it caused
+    almost no change -- consistent with its low magnitude relative to others.
+  - Chart's norm (15.18) is moderate, but its STI with OCR (0.6868)
+    and VQA (0.6253) is substantial, explaining why ChartQA drops
+    from 69.72 (base) to 68.44 when all experts are merged.
+
+------------------------------------------------------------
+3. SPECTRAL OVER-ACCUMULATION ANALYSIS
+------------------------------------------------------------
+Total sum-of-TVs Frobenius energy: 2039.7773
+Total expected energy (orthogonal assumption): 1868.6036
+Energy ratio (sum/expected): 1.0916
+
+Top Singular Value Ratio statistics:
+  Mean:   1.0326
+  Median: 1.0126
+  Std:    0.1382
+  Max:    1.6069
+
+Expert Total Energies (Frobenius norm squared):
+  OCR: 468.5487
+  VQA: 745.8985
+  Geometry: 259.0417
+  Chart: 230.5238
+  Grounding: 164.5910
+
+INTERPRETATION:
+  Energy ratio 1.0916 > 1.0 indicates OVER-ACCUMULATION:
+  Shared directions are amplified by naive summation, distorting the spectrum.
+  The top singular values of the sum are 1.0326x larger than expected.
+
+============================================================
+OVERALL CONCLUSIONS
+============================================================
+
+This analysis provides the empirical foundation for the ETVD framework:
+
+1. TASK VECTOR STRUCTURE (Ensemble SVD):
+   - 86.2% of ensemble basis directions are UNIQUE (occupancy=1),
+     confirming that most of each expert's learned knowledge occupies
+     task-specific parameter subspaces.
+   - 6.0% are SHARED (sign-consistent, occupancy>=2):
+     these directions are over-accumulated under naive sum (amplified by
+     their occupancy count instead of being counted once).
+   - 7.8% show SIGN CONFLICT: destructive interference.
+   - No direction is occupied by all 5 experts, and only 2 directions are
+     occupied by 4 experts, suggesting highly specialized fine-tuning.
+
+2. PAIRWISE INTERFERENCE:
+   - All pairwise cosine similarities are very low (max=0.1411),
+     indicating that these experts modify largely independent parameter sets.
+   - Sign conflict rates near 0.5 for most pairs confirm near-random overlap.
+   - The OCR<->Grounding pair stands out with cos=0.1411 (highest)
+     and conflict rate=0.3895 (lowest), suggesting partial alignment.
+
+3. SPECTRAL OVER-ACCUMULATION:
+   - Energy ratio 1.0916 confirms net over-accumulation exists despite
+     the mostly orthogonal structure. Even the 6.0% shared
+     directions are enough to inflate the merged spectrum by ~9%.
+   - Top singular value ratio mean=1.0326, with some
+     layers reaching 1.6069x over-accumulation.
+   - This supports ETVD's occupancy-aware normalization: shared directions
+     should be scaled down by their occupancy to prevent over-accumulation.
+
+4. IMPLICATIONS FOR MERGING STRATEGY:
+   - The dominance of unique directions (86.2%) suggests that
+     preserving unique directions is the primary concern, not resolving conflicts.
+   - VQA's outsized norm (27.31, 1.7x median) means its task vector
+     dominates the merged vector. Per-expert scaling may help balance contributions.
+   - The 6% shared + 7.8% conflict directions, though small in count,
+     carry disproportionate energy and can shift benchmark performance.
+   - ETVD's occupancy-aware reconstruction specifically targets these directions
+     while leaving the 86.2% unique directions untouched.

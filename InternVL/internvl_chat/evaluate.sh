@@ -2,7 +2,7 @@ set -x
 
 CHECKPOINT=${1}
 DATASET=${2}
-CHECKPOINT="$(pwd)/${CHECKPOINT}"
+[[ "$CHECKPOINT" = /* ]] || CHECKPOINT="$(pwd)/${CHECKPOINT}"
 export PYTHONPATH="$(pwd):${PYTHONPATH}"
 echo "CHECKPOINT: ${CHECKPOINT}"
 

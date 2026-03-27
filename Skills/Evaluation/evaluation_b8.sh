@@ -46,7 +46,7 @@ cd /data/shichao/era-2026/MLLMerging/VLMEvalKit
 
 #   --data MathVista_MINI MathVision_MINI TextVQA_VAL OCRVQA_TESTCORE VizWiz GQA_TestDev_Balanced ChartQA_TEST \
 
-MODEL_NAME="merge_wudi2_exclude_vqa"
+MODEL_NAME="internvl_wudi2_exclude_add_vqa"
 MASTER_PORT="$(python - <<'PY'
 import socket
 with socket.socket() as sock:
@@ -60,7 +60,7 @@ echo "Launching torchrun on master port ${MASTER_PORT}"
 
 PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
 torchrun --master-port "${MASTER_PORT}" --nproc-per-node=1 run.py \
-  --data TextVQA_VAL \
+  --data MathVista_MINI MathVision_MINI TextVQA_VAL OCRVQA_TESTCORE VizWiz GQA_TestDev_Balanced ChartQA_TEST \
   --model "${MODEL_NAME}" \
   --verbose \
   --reuse \

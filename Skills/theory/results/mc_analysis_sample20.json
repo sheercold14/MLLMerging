@@ -1,0 +1,514 @@
+{
+  "total_caps": 36548,
+  "total_within_pairs": 9151140,
+  "total_cross_pairs": 36152994,
+  "total_conflict_pairs": 17589709,
+  "total_redundant_pairs": 18563285,
+  "conflict_ratio": 0.48653533369878027,
+  "pairwise_conflict_agg": {
+    "OCR-VQA": 6.149495373675226,
+    "OCR-Geometry": 3.346999196764078,
+    "OCR-Chart": 3.2304552557914654,
+    "OCR-Grounding": 1.7541026139260558,
+    "VQA-Geometry": 4.247815102417111,
+    "VQA-Chart": 3.918469957416686,
+    "VQA-Grounding": 3.305859079553984,
+    "Geometry-Chart": 2.1411619502958623,
+    "Geometry-Grounding": 1.8334864277376934,
+    "Chart-Grounding": 1.8143899945632131
+  },
+  "caps_per_expert_agg": {
+    "OCR": [
+      156,
+      75,
+      388,
+      696,
+      343,
+      105,
+      681,
+      679,
+      79,
+      322,
+      641,
+      662,
+      86,
+      392,
+      635,
+      323,
+      107,
+      641,
+      708,
+      361
+    ],
+    "VQA": [
+      148,
+      77,
+      407,
+      696,
+      349,
+      106,
+      685,
+      707,
+      83,
+      352,
+      650,
+      698,
+      90,
+      423,
+      658,
+      341,
+      108,
+      644,
+      718,
+      352
+    ],
+    "Geometry": [
+      91,
+      61,
+      303,
+      560,
+      241,
+      93,
+      577,
+      621,
+      72,
+      285,
+      593,
+      643,
+      71,
+      346,
+      578,
+      289,
+      100,
+      583,
+      526,
+      236
+    ],
+    "Chart": [
+      103,
+      66,
+      312,
+      576,
+      295,
+      94,
+      582,
+      570,
+      64,
+      243,
+      515,
+      499,
+      75,
+      287,
+      482,
+      234,
+      99,
+      498,
+      544,
+      292
+    ],
+    "Grounding": [
+      113,
+      68,
+      332,
+      627,
+      270,
+      96,
+      596,
+      601,
+      67,
+      250,
+      529,
+      571,
+      77,
+      337,
+      535,
+      249,
+      98,
+      550,
+      622,
+      289
+    ]
+  },
+  "layer_stats": [
+    {
+      "name": "language_model.model.layers.0.self_attn.q_proj.weight",
+      "shape": [
+        896,
+        896
+      ],
+      "total_caps": 611,
+      "caps_per_expert": [
+        156,
+        148,
+        91,
+        103,
+        113
+      ],
+      "cross_conflict_count": 72317,
+      "cross_redundant_count": 75394,
+      "cross_conflict_mag": 0.7075425898270552,
+      "cross_redundant_mag": 1.341661240753197
+    },
+    {
+      "name": "language_model.model.layers.1.self_attn.k_proj.weight",
+      "shape": [
+        128,
+        896
+      ],
+      "total_caps": 347,
+      "caps_per_expert": [
+        75,
+        77,
+        61,
+        66,
+        68
+      ],
+      "cross_conflict_count": 22862,
+      "cross_redundant_count": 25215,
+      "cross_conflict_mag": 0.05656910800206073,
+      "cross_redundant_mag": 0.11107386067654912
+    },
+    {
+      "name": "language_model.model.layers.2.self_attn.o_proj.weight",
+      "shape": [
+        896,
+        896
+      ],
+      "total_caps": 1742,
+      "caps_per_expert": [
+        388,
+        407,
+        303,
+        312,
+        332
+      ],
+      "cross_conflict_count": 594045,
+      "cross_redundant_count": 615452,
+      "cross_conflict_mag": 0.7586112607529991,
+      "cross_redundant_mag": 0.9045031483272119
+    },
+    {
+      "name": "language_model.model.layers.3.mlp.up_proj.weight",
+      "shape": [
+        4864,
+        896
+      ],
+      "total_caps": 3155,
+      "caps_per_expert": [
+        696,
+        696,
+        560,
+        576,
+        627
+      ],
+      "cross_conflict_count": 1944512,
+      "cross_redundant_count": 2028832,
+      "cross_conflict_mag": 3.5428604208758268,
+      "cross_redundant_mag": 4.232596522605216
+    },
+    {
+      "name": "language_model.model.layers.5.self_attn.q_proj.weight",
+      "shape": [
+        896,
+        896
+      ],
+      "total_caps": 1498,
+      "caps_per_expert": [
+        343,
+        349,
+        241,
+        295,
+        270
+      ],
+      "cross_conflict_count": 441274,
+      "cross_redundant_count": 452000,
+      "cross_conflict_mag": 0.8563383190276033,
+      "cross_redundant_mag": 1.047577551633389
+    },
+    {
+      "name": "language_model.model.layers.6.self_attn.v_proj.weight",
+      "shape": [
+        128,
+        896
+      ],
+      "total_caps": 494,
+      "caps_per_expert": [
+        105,
+        106,
+        93,
+        94,
+        96
+      ],
+      "cross_conflict_count": 46739,
+      "cross_redundant_count": 50798,
+      "cross_conflict_mag": 0.07099832253312596,
+      "cross_redundant_mag": 0.10383797239877474
+    },
+    {
+      "name": "language_model.model.layers.7.mlp.gate_proj.weight",
+      "shape": [
+        4864,
+        896
+      ],
+      "total_caps": 3121,
+      "caps_per_expert": [
+        681,
+        685,
+        577,
+        582,
+        596
+      ],
+      "cross_conflict_count": 1899033,
+      "cross_redundant_count": 1991360,
+      "cross_conflict_mag": 2.9780164449014817,
+      "cross_redundant_mag": 3.673121108384241
+    },
+    {
+      "name": "language_model.model.layers.8.mlp.down_proj.weight",
+      "shape": [
+        896,
+        4864
+      ],
+      "total_caps": 3178,
+      "caps_per_expert": [
+        679,
+        707,
+        621,
+        570,
+        601
+      ],
+      "cross_conflict_count": 1965896,
+      "cross_redundant_count": 2067630,
+      "cross_conflict_mag": 3.3032237326883345,
+      "cross_redundant_mag": 4.12849169429135
+    },
+    {
+      "name": "language_model.model.layers.10.self_attn.k_proj.weight",
+      "shape": [
+        128,
+        896
+      ],
+      "total_caps": 365,
+      "caps_per_expert": [
+        79,
+        83,
+        72,
+        64,
+        67
+      ],
+      "cross_conflict_count": 25365,
+      "cross_redundant_count": 27798,
+      "cross_conflict_mag": 0.07259519849785367,
+      "cross_redundant_mag": 0.12702560536080398
+    },
+    {
+      "name": "language_model.model.layers.11.self_attn.o_proj.weight",
+      "shape": [
+        896,
+        896
+      ],
+      "total_caps": 1452,
+      "caps_per_expert": [
+        322,
+        352,
+        285,
+        243,
+        250
+      ],
+      "cross_conflict_count": 409420,
+      "cross_redundant_count": 429551,
+      "cross_conflict_mag": 0.6929976795557286,
+      "cross_redundant_mag": 0.8909655256535752
+    },
+    {
+      "name": "language_model.model.layers.12.mlp.gate_proj.weight",
+      "shape": [
+        4864,
+        896
+      ],
+      "total_caps": 2928,
+      "caps_per_expert": [
+        641,
+        650,
+        593,
+        515,
+        529
+      ],
+      "cross_conflict_count": 1667276,
+      "cross_redundant_count": 1754268,
+      "cross_conflict_mag": 3.151504539085406,
+      "cross_redundant_mag": 4.135180489301329
+    },
+    {
+      "name": "language_model.model.layers.13.mlp.down_proj.weight",
+      "shape": [
+        896,
+        4864
+      ],
+      "total_caps": 3073,
+      "caps_per_expert": [
+        662,
+        698,
+        643,
+        499,
+        571
+      ],
+      "cross_conflict_count": 1830626,
+      "cross_redundant_count": 1934069,
+      "cross_conflict_mag": 3.262091147571434,
+      "cross_redundant_mag": 4.248139884331397
+    },
+    {
+      "name": "language_model.model.layers.15.self_attn.k_proj.weight",
+      "shape": [
+        128,
+        896
+      ],
+      "total_caps": 399,
+      "caps_per_expert": [
+        86,
+        90,
+        71,
+        75,
+        77
+      ],
+      "cross_conflict_count": 30366,
+      "cross_redundant_count": 33189,
+      "cross_conflict_mag": 0.08326948909072873,
+      "cross_redundant_mag": 0.13000530011782846
+    },
+    {
+      "name": "language_model.model.layers.16.self_attn.o_proj.weight",
+      "shape": [
+        896,
+        896
+      ],
+      "total_caps": 1785,
+      "caps_per_expert": [
+        392,
+        423,
+        346,
+        287,
+        337
+      ],
+      "cross_conflict_count": 620301,
+      "cross_redundant_count": 648688,
+      "cross_conflict_mag": 1.079459071876902,
+      "cross_redundant_mag": 1.2935795685575764
+    },
+    {
+      "name": "language_model.model.layers.17.mlp.up_proj.weight",
+      "shape": [
+        4864,
+        896
+      ],
+      "total_caps": 2888,
+      "caps_per_expert": [
+        635,
+        658,
+        578,
+        482,
+        535
+      ],
+      "cross_conflict_count": 1609835,
+      "cross_redundant_count": 1716026,
+      "cross_conflict_mag": 3.0852643167743308,
+      "cross_redundant_mag": 4.07927813007589
+    },
+    {
+      "name": "language_model.model.layers.19.self_attn.q_proj.weight",
+      "shape": [
+        896,
+        896
+      ],
+      "total_caps": 1436,
+      "caps_per_expert": [
+        323,
+        341,
+        289,
+        234,
+        249
+      ],
+      "cross_conflict_count": 401095,
+      "cross_redundant_count": 419509,
+      "cross_conflict_mag": 0.9016642535081094,
+      "cross_redundant_mag": 1.2257129780768221
+    },
+    {
+      "name": "language_model.model.layers.20.self_attn.v_proj.weight",
+      "shape": [
+        128,
+        896
+      ],
+      "total_caps": 512,
+      "caps_per_expert": [
+        107,
+        108,
+        100,
+        99,
+        98
+      ],
+      "cross_conflict_count": 50205,
+      "cross_redundant_count": 54608,
+      "cross_conflict_mag": 0.07791603016706439,
+      "cross_redundant_mag": 0.10633834207070943
+    },
+    {
+      "name": "language_model.model.layers.21.mlp.gate_proj.weight",
+      "shape": [
+        4864,
+        896
+      ],
+      "total_caps": 2916,
+      "caps_per_expert": [
+        641,
+        644,
+        583,
+        498,
+        550
+      ],
+      "cross_conflict_count": 1647720,
+      "cross_redundant_count": 1745803,
+      "cross_conflict_mag": 3.322796700845996,
+      "cross_redundant_mag": 4.3135481966390845
+    },
+    {
+      "name": "language_model.model.layers.22.mlp.down_proj.weight",
+      "shape": [
+        896,
+        4864
+      ],
+      "total_caps": 3118,
+      "caps_per_expert": [
+        708,
+        718,
+        526,
+        544,
+        622
+      ],
+      "cross_conflict_count": 1862392,
+      "cross_redundant_count": 2010428,
+      "cross_conflict_mag": 3.362788550998842,
+      "cross_redundant_mag": 4.6703495335826775
+    },
+    {
+      "name": "mlp1.3.weight",
+      "shape": [
+        896,
+        896
+      ],
+      "total_caps": 1530,
+      "caps_per_expert": [
+        361,
+        352,
+        236,
+        292,
+        289
+      ],
+      "cross_conflict_count": 448430,
+      "cross_redundant_count": 482667,
+      "cross_conflict_mag": 0.37572777556050296,
+      "cross_redundant_mag": 0.6460213584508784
+    }
+  ]
+}

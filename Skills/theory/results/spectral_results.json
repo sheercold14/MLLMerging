@@ -1,0 +1,26 @@
+{
+  "summary": {
+    "total_sum_energy": 2039.77734375,
+    "total_expected_energy": 1868.6036074441217,
+    "energy_ratio_sum_vs_expected": 1.0916051620707348,
+    "mean_top_sv_ratio": 1.0326068873046,
+    "median_top_sv_ratio": 1.0125860850352355,
+    "std_top_sv_ratio": 0.13815728950080344,
+    "max_top_sv_ratio": 1.6068688108799933,
+    "expert_total_energies": {
+      "OCR": 468.5486810877919,
+      "VQA": 745.8984998762608,
+      "Geometry": 259.0416976734996,
+      "Chart": 230.5237658508122,
+      "Grounding": 164.59095656871796
+    },
+    "num_layers": 170
+  },
+  "top_sv_ratios_stats": {
+    "mean": 1.0326068873046,
+    "median": 1.0125860850352355,
+    "std": 0.13815728950080344,
+    "min": 0.8237533101464823,
+    "max": 1.6068688108799933
+  }
+}

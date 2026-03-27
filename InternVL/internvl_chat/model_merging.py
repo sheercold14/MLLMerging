@@ -758,6 +758,916 @@ def wudi_merging2(merged_model: nn.Module, models_to_merge: list, exclude_param_
     
     return merged_params
 
+def mc_wudi2_merging(merged_model: nn.Module, models_to_merge: list, exclude_param_names_regex: list,
+                     scaling_coefficient: float = 1.0, beta: float = 0.5, energy_ratio: float = 0.95):
+    """
+    Route A: Micro-Capability aware wudi2 (MC-wudi2).
+
+    Pre-resolves cross-expert conflicts at the micro-capability level before
+    feeding cleaned task vectors to wudi2's optimization.
+
+    Algorithm:
+    1. For each 2D layer, extract micro-capabilities via individual SVD
+    2. Build K×K interference matrix I_ab = (u_a·u_b)(v_a·v_b) * σ_a * σ_b
+    3. Suppress conflicting micro-capabilities (reduce σ for high-conflict caps)
+    4. Reconstruct cleaned task vectors
+    5. Run wudi2 optimization on cleaned task vectors
+    """
+    assert isinstance(scaling_coefficient, float), "wrong type of scaling_coefficient, should be float!"
+    models_to_merge_task_vectors = [
+        TaskVector(pretrained_model=merged_model,
+                  finetuned_model=model_to_merge,
+                  exclude_param_names_regex=exclude_param_names_regex)
+        for model_to_merge in models_to_merge
+    ]
+
+    def suppress_conflicts(vectors, beta=0.5, energy_ratio=0.95):
+        """
+        Suppress conflicting micro-capabilities across experts.
+
+        Args:
+            vectors: (N, m, n) stacked task vectors
+            beta: conflict suppression strength (0=no suppression, 1=aggressive)
+            energy_ratio: SVD energy threshold for micro-capability extraction
+        Returns:
+            cleaned vectors (N, m, n)
+        """
+        N, m, n = vectors.shape
+        device = vectors.device
+
+        # Extract micro-capabilities for each expert
+        all_sigmas = []
+        all_us = []
+        all_vs = []
+        expert_ids = []
+        expert_k_ranges = []  # (start, end) indices for each expert
+
+        idx = 0
+        for i in range(N):
+            U_i, S_i, Vt_i = torch.linalg.svd(vectors[i], full_matrices=False)
+            total_energy = torch.sum(S_i ** 2)
+            cumulative = torch.cumsum(S_i ** 2, dim=0)
+            k = torch.searchsorted(cumulative, energy_ratio * total_energy).item() + 1
+            k = max(k, 1)
+            k = min(k, S_i.shape[0])
+
+            all_sigmas.append(S_i[:k])
+            all_us.append(U_i[:, :k])
+            all_vs.append(Vt_i[:k, :])
+            expert_ids.extend([i] * k)
+            expert_k_ranges.append((idx, idx + k))
+            idx += k
+
+        # Stack all micro-capabilities
+        sigmas = torch.cat(all_sigmas)  # (K,)
+        K = sigmas.shape[0]
+        expert_ids = torch.tensor(expert_ids, device=device)
+
+        # Build interference matrix efficiently using batched ops
+        # U overlap: need block-wise computation to avoid OOM for large K
+        # For K~1800, K×K = 3.24M entries — manageable
+        U_cat = torch.cat(all_us, dim=1).T  # (K, m)
+        V_cat = torch.cat(all_vs, dim=0)    # (K, n)
+
+        u_overlap = U_cat @ U_cat.T  # (K, K)
+        v_overlap = V_cat @ V_cat.T  # (K, K)
+        sigma_outer = sigmas.unsqueeze(1) * sigmas.unsqueeze(0)
+        I_matrix = u_overlap * v_overlap * sigma_outer
+
+        # Compute conflict scores for each micro-capability
+        # conflict_score_a = sum of |I_{a,b}| for b from different experts where I_{a,b} < 0
+        suppression_factors = torch.ones(K, device=device)
+
+        for i in range(N):
+            start_i, end_i = expert_k_ranges[i]
+            # Mask for other experts' capabilities
+            other_mask = expert_ids != i  # (K,)
+
+            for a_local in range(end_i - start_i):
+                a = start_i + a_local
+                # Get conflict values with other experts
+                cross_vals = I_matrix[a] * other_mask.float()
+                # Only count negative (conflict) interactions
+                conflict_vals = torch.clamp(-cross_vals, min=0)
+                conflict_score = conflict_vals.sum().item()
+
+                if conflict_score > 0:
+                    # Normalize by the capability's own contribution
+                    own_contribution = sigmas[a].item() ** 2
+                    relative_conflict = conflict_score / (own_contribution + 1e-10)
+                    suppression = max(0.0, 1.0 - beta * relative_conflict)
+                    suppression_factors[a] = suppression
+
+        # Reconstruct cleaned task vectors
+        cleaned = torch.zeros_like(vectors)
+        for i in range(N):
+            start_i, end_i = expert_k_ranges[i]
+            suppressed_s = all_sigmas[i] * suppression_factors[start_i:end_i]
+            cleaned[i] = all_us[i] @ torch.diag(suppressed_s) @ all_vs[i]
+
+        n_suppressed = (suppression_factors < 1.0).sum().item()
+        n_zeroed = (suppression_factors == 0.0).sum().item()
+        avg_suppression = suppression_factors.mean().item()
+        print(f"  MC: K={K}, suppressed={n_suppressed}/{K} "
+              f"({n_suppressed/K*100:.1f}%), zeroed={n_zeroed}, "
+              f"avg_factor={avg_suppression:.3f}")
+
+        del I_matrix, u_overlap, v_overlap, sigma_outer, U_cat, V_cat
+        return cleaned
+
+    def get_redundant_task_vector_mc(param_name, vectors, beta=0.5,
+                                     energy_ratio=0.95, iter_num=300):
+        """wudi2 optimization with MC pre-processing."""
+        original_dtype = vectors.dtype
+        vectors = vectors.to(torch.float32)
+
+        # Step 1: Suppress conflicts
+        vectors = suppress_conflicts(vectors, beta=beta, energy_ratio=energy_ratio)
+
+        # Step 2: Standard wudi2 optimization on cleaned vectors
+        average_vector = vectors.mean(dim=0)
+        low_rank_list = []
+        taskvector_list = []
+        for i in range(vectors.shape[0]):
+            vector = vectors[i]
+            u, s, v = torch.linalg.svd(vector, full_matrices=True)
+            u2, s2, v2 = torch.linalg.svd(vector - average_vector, full_matrices=False)
+            reduced_index_s = int(s.shape[0] / vectors.shape[0])
+            u2 = u2[:, :reduced_index_s]
+            s2 = s2[:reduced_index_s]
+            v2 = v2[:reduced_index_s, :]
+            s_mask = torch.zeros_like(s)
+            s_mask[:reduced_index_s] = 1
+            s = s * s_mask
+            v_mask = torch.zeros_like(v)
+            v_mask[:reduced_index_s, :] = 1
+            v = v * v_mask
+            S_matrix = torch.zeros(vector.shape[0], vector.shape[1], device=s.device)
+            min_dim = min(vector.shape)
+            S_matrix[:min_dim, :min_dim] = torch.diag_embed(s)
+            low_rank_list.append(S_matrix @ v)
+            taskvector_list.append(u2 @ torch.diag_embed(s2) @ v2 + average_vector)
+        low_rank = torch.stack(low_rank_list)
+        taskvector = torch.stack(taskvector_list)
+
+        merging_vector = torch.nn.Parameter(torch.sum(vectors, dim=0))
+        optimizer = torch.optim.Adam([merging_vector], lr=1e-5)
+        l2_norms = torch.square(torch.norm(vectors.reshape(vectors.shape[0], -1), p=2, dim=-1))
+
+        for i in tqdm(range(iter_num), desc=f"Optimizing {param_name}", leave=False):
+            disturbing_vectors = merging_vector.unsqueeze(0) - taskvector
+            inner_product = torch.matmul(disturbing_vectors, low_rank.transpose(1, 2))
+            loss = torch.sum(torch.square(inner_product) / l2_norms.unsqueeze(-1).unsqueeze(-1))
+            if i % 50 == 0:
+                print(f"Step {i}, loss: {loss.item()}")
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+
+        return merging_vector.data.detach().to(original_dtype)
+
+    merged_task_vector_dict = {}
+
+    for param_name in models_to_merge_task_vectors[0].task_vector_param_dict:
+        if len(models_to_merge_task_vectors[0].task_vector_param_dict[param_name].shape) == 2 and "lm_head" not in param_name:
+            print(f"Processing {param_name} with shape {models_to_merge_task_vectors[0].task_vector_param_dict[param_name].shape}")
+            values = torch.stack([
+                task_vector.task_vector_param_dict[param_name]
+                for task_vector in models_to_merge_task_vectors
+            ])
+            merging_vector = get_redundant_task_vector_mc(
+                param_name, values, beta=beta, energy_ratio=energy_ratio, iter_num=300
+            )
+            merged_task_vector_dict[param_name] = merging_vector
+
+    for param_name in models_to_merge_task_vectors[0].task_vector_param_dict.keys():
+        if param_name not in merged_task_vector_dict:
+            print(f"Using simple averaging for {param_name}")
+            merged_param = models_to_merge_task_vectors[0].task_vector_param_dict[param_name].clone()
+            for i, task_vector in enumerate(models_to_merge_task_vectors[1:], 1):
+                vec = task_vector.task_vector_param_dict[param_name]
+                merged_param += (vec - merged_param) / (i + 1)
+            merged_task_vector_dict[param_name] = merged_param
+
+    merged_task_vector = TaskVector(task_vector_param_dict=merged_task_vector_dict)
+    merged_params = merged_task_vector.combine_with_pretrained_model(
+        pretrained_model=merged_model,
+        scaling_coefficient=scaling_coefficient
+    )
+    return merged_params
+
+
+def anova_wudi2_merging(merged_model: nn.Module, models_to_merge: list, exclude_param_names_regex: list,
+                        scaling_coefficient: float = 1.0, occupancy_threshold: float = 0.3,
+                        alpha_0: float = 1.0, alpha_g: float = 0.8):
+    """
+    Route B: ANOVA-wudi2 — hierarchical decomposition + wudi2 optimization.
+
+    Replaces wudi2's crude global-average decomposition with ETVD-guided
+    hierarchical ANOVA decomposition:
+      tau_i = mu + (mu_g(i) - mu) + residual_i
+
+    The shared (mu) and group (mu_g - mu) components are deterministically merged.
+    Only the residuals go through wudi2's optimization, giving it a cleaner target.
+
+    Algorithm:
+    1. Pre-processing: discover expert groups via ETVD U-matrix across all layers
+    2. Per layer: ANOVA decomposition → deterministic shared merge + wudi2 on residuals
+    """
+    assert isinstance(scaling_coefficient, float)
+    models_to_merge_task_vectors = [
+        TaskVector(pretrained_model=merged_model,
+                  finetuned_model=model_to_merge,
+                  exclude_param_names_regex=exclude_param_names_regex)
+        for model_to_merge in models_to_merge
+    ]
+
+    N = len(models_to_merge)
+
+    # Step 1: Discover expert groups via ETVD U-matrix across all layers
+    print("ANOVA: Discovering expert groups via joint SVD...")
+    affinity = torch.zeros(N, N)
+
+    param_names_2d = [
+        p for p in models_to_merge_task_vectors[0].task_vector_param_dict
+        if len(models_to_merge_task_vectors[0].task_vector_param_dict[p].shape) == 2
+        and "lm_head" not in p
+    ]
+
+    for param_name in tqdm(param_names_2d, desc="Computing affinity"):
+        vectors = torch.stack([
+            tv.task_vector_param_dict[param_name].float()
+            for tv in models_to_merge_task_vectors
+        ])  # N × m × n
+        # Flatten and stack for joint SVD
+        T = vectors.reshape(N, -1)  # N × d
+        U, S, Vt = torch.linalg.svd(T, full_matrices=False)
+
+        # For each singular direction, find which experts participate
+        for k in range(min(N, S.shape[0])):
+            significant = torch.abs(U[:, k]) > occupancy_threshold
+            if significant.sum() >= 2:
+                idxs = torch.where(significant)[0]
+                for ii in range(len(idxs)):
+                    for jj in range(ii + 1, len(idxs)):
+                        affinity[idxs[ii], idxs[jj]] += 1
+                        affinity[idxs[jj], idxs[ii]] += 1
+
+    # Simple group discovery: threshold-based clustering
+    # Normalize affinity by number of layers
+    affinity = affinity / len(param_names_2d)
+    print(f"ANOVA: Affinity matrix (normalized by {len(param_names_2d)} layers):")
+    for i in range(N):
+        row = [f"{affinity[i, j]:.3f}" for j in range(N)]
+        print(f"  Expert {i}: [{', '.join(row)}]")
+
+    # Hierarchical clustering: merge pairs with affinity > median
+    # Use simple greedy: find highest affinity pair, merge, repeat
+    groups = [[i] for i in range(N)]  # start with each expert in own group
+    flat_affinities = []
+    for i in range(N):
+        for j in range(i + 1, N):
+            flat_affinities.append((affinity[i, j].item(), i, j))
+    flat_affinities.sort(reverse=True)
+
+    # Merge groups with affinity above threshold (top quartile)
+    if flat_affinities:
+        merge_threshold = flat_affinities[len(flat_affinities) // 4][0]  # top 25%
+        merged_ids = list(range(N))
+        for aff_val, i, j in flat_affinities:
+            if aff_val < merge_threshold:
+                break
+            gi, gj = merged_ids[i], merged_ids[j]
+            if gi != gj:
+                # Merge group j into group i
+                for k in range(N):
+                    if merged_ids[k] == gj:
+                        merged_ids[k] = gi
+
+        # Build final groups
+        group_map = {}
+        for i in range(N):
+            gid = merged_ids[i]
+            if gid not in group_map:
+                group_map[gid] = []
+            group_map[gid].append(i)
+        groups = list(group_map.values())
+
+    print(f"ANOVA: Discovered {len(groups)} groups: {groups}")
+
+    # Build expert-to-group mapping
+    expert_to_group = {}
+    for g_idx, group in enumerate(groups):
+        for expert_idx in group:
+            expert_to_group[expert_idx] = g_idx
+
+    # Step 2: Per-layer ANOVA decomposition + wudi2 on residuals
+    def get_anova_wudi2_vector(param_name, vectors, iter_num=300):
+        """ANOVA decomposition + wudi2 optimization on residuals."""
+        original_dtype = vectors.dtype
+        vectors = vectors.to(torch.float32)
+        N_loc = vectors.shape[0]
+
+        # ANOVA decomposition
+        mu = vectors.mean(dim=0)  # global mean
+        mu_g_list = []
+        for g_idx, group in enumerate(groups):
+            group_mean = torch.stack([vectors[i] for i in group]).mean(dim=0)
+            mu_g_list.append(group_mean)
+
+        residuals = torch.stack([
+            vectors[i] - mu_g_list[expert_to_group[i]]
+            for i in range(N_loc)
+        ])  # N × m × n
+
+        # Deterministic shared component
+        m_shared = alpha_0 * mu
+        for g_idx, group in enumerate(groups):
+            m_shared = m_shared + alpha_g * (mu_g_list[g_idx] - mu) * (len(group) / N_loc)
+
+        # Compute energy distribution for logging
+        mu_energy = torch.norm(mu).item()
+        group_energy = sum(
+            torch.norm(mu_g_list[g] - mu).item() * len(groups[g])
+            for g in range(len(groups))
+        ) / N_loc
+        residual_energy = torch.norm(residuals).item() / N_loc
+        print(f"  ANOVA: mu_energy={mu_energy:.4f}, group_energy={group_energy:.4f}, "
+              f"residual_energy={residual_energy:.4f}")
+
+        # Standard wudi2 optimization on RESIDUALS (not full task vectors)
+        average_residual = residuals.mean(dim=0)
+        low_rank_list = []
+        taskvector_list = []
+        for i in range(N_loc):
+            r = residuals[i]
+            u, s, v = torch.linalg.svd(r, full_matrices=True)
+            u2, s2, v2 = torch.linalg.svd(r - average_residual, full_matrices=False)
+            reduced_index_s = int(s.shape[0] / N_loc)
+            u2 = u2[:, :reduced_index_s]
+            s2 = s2[:reduced_index_s]
+            v2 = v2[:reduced_index_s, :]
+            s_mask = torch.zeros_like(s)
+            s_mask[:reduced_index_s] = 1
+            s = s * s_mask
+            v_mask = torch.zeros_like(v)
+            v_mask[:reduced_index_s, :] = 1
+            v = v * v_mask
+            S_matrix = torch.zeros(r.shape[0], r.shape[1], device=s.device)
+            min_dim = min(r.shape)
+            S_matrix[:min_dim, :min_dim] = torch.diag_embed(s)
+            low_rank_list.append(S_matrix @ v)
+            taskvector_list.append(u2 @ torch.diag_embed(s2) @ v2 + average_residual)
+        low_rank = torch.stack(low_rank_list)
+        taskvector = torch.stack(taskvector_list)
+
+        merging_vector = torch.nn.Parameter(torch.sum(residuals, dim=0))
+        optimizer = torch.optim.Adam([merging_vector], lr=1e-5)
+        l2_norms = torch.square(torch.norm(residuals.reshape(N_loc, -1), p=2, dim=-1))
+        # Avoid division by zero for very small residuals
+        l2_norms = torch.clamp(l2_norms, min=1e-10)
+
+        for i in tqdm(range(iter_num), desc=f"ANOVA-opt {param_name}", leave=False):
+            disturbing_vectors = merging_vector.unsqueeze(0) - taskvector
+            inner_product = torch.matmul(disturbing_vectors, low_rank.transpose(1, 2))
+            loss = torch.sum(torch.square(inner_product) / l2_norms.unsqueeze(-1).unsqueeze(-1))
+            if i % 50 == 0:
+                print(f"Step {i}, loss: {loss.item()}")
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+
+        m_residual = merging_vector.data.detach()
+
+        # Combine: shared + scaled residual
+        result = m_shared + m_residual
+        return result.to(original_dtype)
+
+    merged_task_vector_dict = {}
+
+    for param_name in models_to_merge_task_vectors[0].task_vector_param_dict:
+        if len(models_to_merge_task_vectors[0].task_vector_param_dict[param_name].shape) == 2 and "lm_head" not in param_name:
+            print(f"Processing {param_name} with shape {models_to_merge_task_vectors[0].task_vector_param_dict[param_name].shape}")
+            values = torch.stack([
+                task_vector.task_vector_param_dict[param_name]
+                for task_vector in models_to_merge_task_vectors
+            ])
+            merging_vector = get_anova_wudi2_vector(param_name, values, iter_num=300)
+            merged_task_vector_dict[param_name] = merging_vector
+
+    for param_name in models_to_merge_task_vectors[0].task_vector_param_dict.keys():
+        if param_name not in merged_task_vector_dict:
+            print(f"Using simple averaging for {param_name}")
+            merged_param = models_to_merge_task_vectors[0].task_vector_param_dict[param_name].clone()
+            for i, task_vector in enumerate(models_to_merge_task_vectors[1:], 1):
+                vec = task_vector.task_vector_param_dict[param_name]
+                merged_param += (vec - merged_param) / (i + 1)
+            merged_task_vector_dict[param_name] = merged_param
+
+    merged_task_vector = TaskVector(task_vector_param_dict=merged_task_vector_dict)
+    merged_params = merged_task_vector.combine_with_pretrained_model(
+        pretrained_model=merged_model,
+        scaling_coefficient=scaling_coefficient
+    )
+    return merged_params
+
+
+def tucker_wudi2_merging(merged_model: nn.Module, models_to_merge: list, exclude_param_names_regex: list,
+                         scaling_coefficient: float = 1.0, top_k: int = 40, iter_num: int = 300):
+    """
+    Route C: Tucker subspace wudi2.
+
+    Constrains wudi2's optimization to the joint low-rank subspace spanned by
+    the experts' task vectors, reducing search space by ~100x.
+
+    Algorithm:
+    1. For each 2D layer, compute individual SVDs → extract top-k left/right singular vectors
+    2. Pool and orthogonalize → joint output basis B, joint input basis C
+    3. Project task vectors and wudi2 targets into (r2 × r3) subspace
+    4. Optimize in low-dimensional space
+    5. Reconstruct: m = B @ X* @ C^T
+    """
+    assert isinstance(scaling_coefficient, float)
+    models_to_merge_task_vectors = [
+        TaskVector(pretrained_model=merged_model,
+                  finetuned_model=model_to_merge,
+                  exclude_param_names_regex=exclude_param_names_regex)
+        for model_to_merge in models_to_merge
+    ]
+
+    def get_tucker_merging_vector(param_name, vectors, top_k=40, iter_num=300):
+        """
+        Optimize merging vector in Tucker subspace.
+        """
+        original_dtype = vectors.dtype
+        vectors = vectors.to(torch.float32)
+        N, m, n = vectors.shape
+
+        # Step 1: Build joint bases via pooled SVD
+        U_pool_list = []
+        V_pool_list = []
+        for i in range(N):
+            Ui, Si, Vti = torch.linalg.svd(vectors[i], full_matrices=False)
+            k = min(top_k, Si.shape[0])
+            U_pool_list.append(Ui[:, :k])
+            V_pool_list.append(Vti[:k, :].T)  # n × k
+
+        U_pool = torch.cat(U_pool_list, dim=1)  # m × (N*k)
+        V_pool = torch.cat(V_pool_list, dim=1)  # n × (N*k)
+
+        # Orthogonalize via QR
+        B, _ = torch.linalg.qr(U_pool)  # m × r2
+        C, _ = torch.linalg.qr(V_pool)  # n × r3
+        r2, r3 = B.shape[1], C.shape[1]
+        print(f"  Tucker: r2={r2}, r3={r3} (vs full {m}×{n}={m*n}), "
+              f"compression={m*n/(r2*r3):.0f}x")
+
+        # Step 2: wudi2-style target construction (full space, same as original wudi2)
+        average_vector = vectors.mean(dim=0)
+        target_full_list = []
+        low_rank_full_list = []
+
+        for i in range(N):
+            vector = vectors[i]
+            u, s, v = torch.linalg.svd(vector, full_matrices=True)
+            u2, s2, v2 = torch.linalg.svd(vector - average_vector, full_matrices=False)
+            reduced_index_s = int(s.shape[0] / N)
+
+            # Cleaned target (same as wudi2)
+            u2_k = u2[:, :reduced_index_s]
+            s2_k = s2[:reduced_index_s]
+            v2_k = v2[:reduced_index_s, :]
+            target_i = u2_k @ torch.diag(s2_k) @ v2_k + average_vector
+
+            # Low-rank projection subspace (same as wudi2)
+            s_mask = torch.zeros_like(s)
+            s_mask[:reduced_index_s] = 1
+            s = s * s_mask
+            v_mask = torch.zeros_like(v)
+            v_mask[:reduced_index_s, :] = 1
+            v = v * v_mask
+            S_matrix = torch.zeros(m, n, device=s.device)
+            min_dim = min(m, n)
+            S_matrix[:min_dim, :min_dim] = torch.diag_embed(s)
+            low_rank_i = S_matrix @ v  # m × n
+
+            target_full_list.append(target_i)
+            low_rank_full_list.append(low_rank_i)
+
+        targets_full = torch.stack(target_full_list)    # N × m × n
+        low_ranks = torch.stack(low_rank_full_list)     # N × m × n
+        l2_norms = torch.square(torch.norm(vectors.reshape(N, -1), p=2, dim=-1))
+
+        # Step 3: Optimize X in Tucker subspace
+        # Project targets into Tucker coords for initialization
+        targets_proj = torch.stack([B.T @ targets_full[i] @ C for i in range(N)])
+        X = torch.nn.Parameter(targets_proj.mean(dim=0))  # r2 × r3
+        optimizer = torch.optim.Adam([X], lr=1e-3)
+
+        # Pre-compute low_rank projections for efficiency: L_i @ C (m×n @ n×r3 = m×r3)
+        # loss = ||(B@X@C^T - target_i) @ L_i^T||^2
+        #      = ||B@X@C^T@L_i^T - target_i@L_i^T||^2
+        # Pre-compute target_i @ L_i^T (m × m)
+        target_L_list = [(targets_full[i] @ low_ranks[i].T).detach() for i in range(N)]
+
+        for step in tqdm(range(iter_num), desc=f"Tucker-opt {param_name}", leave=False):
+            m_full = B @ X @ C.T  # m × n
+            loss = 0.0
+            for i in range(N):
+                proj = m_full @ low_ranks[i].T - target_L_list[i]
+                loss = loss + torch.sum(proj ** 2) / l2_norms[i]
+
+            if step % 50 == 0:
+                print(f"Step {step}, loss: {loss.item():.6f}")
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+
+        # Reconstruct final merging vector
+        result = B @ X.data @ C.T
+        return result.detach().to(original_dtype)
+
+    merged_task_vector_dict = {}
+
+    for param_name in models_to_merge_task_vectors[0].task_vector_param_dict:
+        if len(models_to_merge_task_vectors[0].task_vector_param_dict[param_name].shape) == 2 and "lm_head" not in param_name:
+            print(f"Processing {param_name} with shape {models_to_merge_task_vectors[0].task_vector_param_dict[param_name].shape}")
+            values = torch.stack([
+                task_vector.task_vector_param_dict[param_name]
+                for task_vector in models_to_merge_task_vectors
+            ])
+            merging_vector = get_tucker_merging_vector(
+                param_name, values, top_k=top_k, iter_num=iter_num
+            )
+            merged_task_vector_dict[param_name] = merging_vector
+
+    for param_name in models_to_merge_task_vectors[0].task_vector_param_dict.keys():
+        if param_name not in merged_task_vector_dict:
+            print(f"Using simple averaging for {param_name}")
+            merged_param = models_to_merge_task_vectors[0].task_vector_param_dict[param_name].clone()
+            for i, task_vector in enumerate(models_to_merge_task_vectors[1:], 1):
+                vec = task_vector.task_vector_param_dict[param_name]
+                merged_param += (vec - merged_param) / (i + 1)
+            merged_task_vector_dict[param_name] = merged_param
+
+    merged_task_vector = TaskVector(task_vector_param_dict=merged_task_vector_dict)
+    merged_params = merged_task_vector.combine_with_pretrained_model(
+        pretrained_model=merged_model,
+        scaling_coefficient=scaling_coefficient
+    )
+    return merged_params
+
+
+def tucker_wudi2_cf_merging(merged_model: nn.Module, models_to_merge: list, exclude_param_names_regex: list,
+                            scaling_coefficient: float = 1.0, top_k: int = 40):
+    """
+    Tucker subspace wudi2 with closed-form solution.
+
+    Instead of 300-step Adam, solves X* = G @ H^{-1} exactly.
+    The wudi2 loss is quadratic in X within the Tucker subspace,
+    so the optimum is a linear system solve.
+    """
+    assert isinstance(scaling_coefficient, float)
+    models_to_merge_task_vectors = [
+        TaskVector(pretrained_model=merged_model,
+                  finetuned_model=model_to_merge,
+                  exclude_param_names_regex=exclude_param_names_regex)
+        for model_to_merge in models_to_merge
+    ]
+
+    def get_tucker_cf_vector(param_name, vectors, top_k=40):
+        """Closed-form Tucker subspace merging."""
+        original_dtype = vectors.dtype
+        vectors = vectors.to(torch.float32)
+        N, m, n = vectors.shape
+
+        # Step 1: Build joint bases via pooled SVD (same as iterative Tucker)
+        U_pool_list = []
+        V_pool_list = []
+        for i in range(N):
+            Ui, Si, Vti = torch.linalg.svd(vectors[i], full_matrices=False)
+            k = min(top_k, Si.shape[0])
+            U_pool_list.append(Ui[:, :k])
+            V_pool_list.append(Vti[:k, :].T)  # n × k
+
+        U_pool = torch.cat(U_pool_list, dim=1)  # m × (N*k)
+        V_pool = torch.cat(V_pool_list, dim=1)  # n × (N*k)
+
+        # Orthogonalize via QR
+        B, _ = torch.linalg.qr(U_pool)  # m × r2
+        C, _ = torch.linalg.qr(V_pool)  # n × r3
+        r2, r3 = B.shape[1], C.shape[1]
+        print(f"  Tucker-CF: r2={r2}, r3={r3} (vs full {m}×{n}={m*n}), "
+              f"compression={m*n/(r2*r3):.0f}x")
+
+        # Step 2: Compute wudi2 targets and projection matrices
+        average_vector = vectors.mean(dim=0)
+        l2_norms = torch.sum(vectors.reshape(N, -1) ** 2, dim=-1)  # (N,)
+
+        # Accumulate H (r3 × r3) and G (r2 × r3)
+        H = torch.zeros(r3, r3, device=vectors.device, dtype=torch.float32)
+        G = torch.zeros(r2, r3, device=vectors.device, dtype=torch.float32)
+
+        for i in range(N):
+            vector = vectors[i]
+            u, s, v = torch.linalg.svd(vector, full_matrices=True)
+            u2, s2, v2 = torch.linalg.svd(vector - average_vector, full_matrices=False)
+            reduced_index_s = int(s.shape[0] / N)
+
+            # Cleaned target T_i (same as wudi2)
+            u2_k = u2[:, :reduced_index_s]
+            s2_k = s2[:reduced_index_s]
+            v2_k = v2[:reduced_index_s, :]
+            target_i = u2_k @ torch.diag(s2_k) @ v2_k + average_vector  # m × n
+
+            # Low-rank projection L_i (same as wudi2)
+            s_mask = torch.zeros_like(s)
+            s_mask[:reduced_index_s] = 1
+            s = s * s_mask
+            v_mask = torch.zeros_like(v)
+            v_mask[:reduced_index_s, :] = 1
+            v = v * v_mask
+            S_matrix = torch.zeros(m, n, device=s.device)
+            min_dim = min(m, n)
+            S_matrix[:min_dim, :min_dim] = torch.diag_embed(s)
+            low_rank_i = S_matrix @ v  # m × n
+
+            n_i = l2_norms[i]
+
+            # Efficient computation avoiding m×m intermediates:
+            # Z_i = L_i @ C  (m × r3)
+            Z_i = low_rank_i @ C  # m × r3
+
+            # H += Z_i^T @ Z_i / n_i  (r3 × r3)
+            H += Z_i.T @ Z_i / n_i
+
+            # G += (B^T @ T_i) @ (L_i^T @ Z_i) / n_i  (r2 × r3)
+            BtT = B.T @ target_i    # r2 × n
+            LtZ = low_rank_i.T @ Z_i  # n × r3
+            G += BtT @ LtZ / n_i
+
+        # Step 3: Closed-form solution X* = G @ H^{-1}
+        # Tikhonov regularization for rank-deficient H (esp. K/V layers)
+        reg = 1e-6 * torch.trace(H) / r3
+        H_reg = H + reg * torch.eye(r3, device=H.device, dtype=H.dtype)
+        X_star = G @ torch.linalg.inv(H_reg)  # r2 × r3
+
+        # Compute residual loss for diagnostics
+        m_full = B @ X_star @ C.T
+        loss = 0.0
+        # Re-derive targets for loss computation
+        for i in range(N):
+            vector = vectors[i]
+            u, s, v = torch.linalg.svd(vector, full_matrices=True)
+            u2, s2, v2 = torch.linalg.svd(vector - average_vector, full_matrices=False)
+            reduced_index_s = int(s.shape[0] / N)
+            u2_k = u2[:, :reduced_index_s]
+            s2_k = s2[:reduced_index_s]
+            v2_k = v2[:reduced_index_s, :]
+            target_i = u2_k @ torch.diag(s2_k) @ v2_k + average_vector
+            s_mask = torch.zeros_like(s)
+            s_mask[:reduced_index_s] = 1
+            s = s * s_mask
+            v_mask = torch.zeros_like(v)
+            v_mask[:reduced_index_s, :] = 1
+            v = v * v_mask
+            S_matrix = torch.zeros(m, n, device=s.device)
+            min_dim = min(m, n)
+            S_matrix[:min_dim, :min_dim] = torch.diag_embed(s)
+            low_rank_i = S_matrix @ v
+            proj = m_full @ low_rank_i.T - target_i @ low_rank_i.T
+            loss += torch.sum(proj ** 2) / l2_norms[i]
+        print(f"  Closed-form loss: {loss.item():.6f}")
+
+        result = B @ X_star @ C.T
+        return result.detach().to(original_dtype)
+
+    merged_task_vector_dict = {}
+
+    for param_name in models_to_merge_task_vectors[0].task_vector_param_dict:
+        if len(models_to_merge_task_vectors[0].task_vector_param_dict[param_name].shape) == 2 and "lm_head" not in param_name:
+            print(f"Processing {param_name} with shape {models_to_merge_task_vectors[0].task_vector_param_dict[param_name].shape}")
+            values = torch.stack([
+                task_vector.task_vector_param_dict[param_name]
+                for task_vector in models_to_merge_task_vectors
+            ])
+            merging_vector = get_tucker_cf_vector(
+                param_name, values, top_k=top_k
+            )
+            merged_task_vector_dict[param_name] = merging_vector
+
+    for param_name in models_to_merge_task_vectors[0].task_vector_param_dict.keys():
+        if param_name not in merged_task_vector_dict:
+            print(f"Using simple averaging for {param_name}")
+            merged_param = models_to_merge_task_vectors[0].task_vector_param_dict[param_name].clone()
+            for i, task_vector in enumerate(models_to_merge_task_vectors[1:], 1):
+                vec = task_vector.task_vector_param_dict[param_name]
+                merged_param += (vec - merged_param) / (i + 1)
+            merged_task_vector_dict[param_name] = merged_param
+
+    merged_task_vector = TaskVector(task_vector_param_dict=merged_task_vector_dict)
+    merged_params = merged_task_vector.combine_with_pretrained_model(
+        pretrained_model=merged_model,
+        scaling_coefficient=scaling_coefficient
+    )
+    return merged_params
+
+
+def mc_tucker_wudi2_cf_merging(merged_model: nn.Module, models_to_merge: list, exclude_param_names_regex: list,
+                                scaling_coefficient: float = 1.0, beta: float = 0.5,
+                                energy_ratio: float = 0.95, top_k: int = 40):
+    """
+    Route A+C: MC conflict suppression + Tucker closed-form.
+
+    Combines micro-capability conflict resolution (Route A) with
+    Tucker subspace closed-form solution (Route C).
+    """
+    assert isinstance(scaling_coefficient, float)
+    models_to_merge_task_vectors = [
+        TaskVector(pretrained_model=merged_model,
+                  finetuned_model=model_to_merge,
+                  exclude_param_names_regex=exclude_param_names_regex)
+        for model_to_merge in models_to_merge
+    ]
+
+    def suppress_conflicts(vectors, beta=0.5, energy_ratio=0.95):
+        """Suppress conflicting micro-capabilities across experts (same as mc_wudi2)."""
+        N, m, n = vectors.shape
+        device = vectors.device
+        all_sigmas, all_us, all_vs = [], [], []
+        expert_ids = []
+        expert_k_ranges = []
+        idx = 0
+        for i in range(N):
+            U_i, S_i, Vt_i = torch.linalg.svd(vectors[i], full_matrices=False)
+            total_energy = torch.sum(S_i ** 2)
+            cumulative = torch.cumsum(S_i ** 2, dim=0)
+            k = torch.searchsorted(cumulative, energy_ratio * total_energy).item() + 1
+            k = max(k, 1)
+            k = min(k, S_i.shape[0])
+            all_sigmas.append(S_i[:k])
+            all_us.append(U_i[:, :k])
+            all_vs.append(Vt_i[:k, :])
+            expert_ids.extend([i] * k)
+            expert_k_ranges.append((idx, idx + k))
+            idx += k
+
+        sigmas = torch.cat(all_sigmas)
+        K = sigmas.shape[0]
+        expert_ids_t = torch.tensor(expert_ids, device=device)
+        U_cat = torch.cat(all_us, dim=1).T
+        V_cat = torch.cat(all_vs, dim=0)
+        u_overlap = U_cat @ U_cat.T
+        v_overlap = V_cat @ V_cat.T
+        sigma_outer = sigmas.unsqueeze(1) * sigmas.unsqueeze(0)
+        I_matrix = u_overlap * v_overlap * sigma_outer
+
+        suppression_factors = torch.ones(K, device=device)
+        for i in range(N):
+            start_i, end_i = expert_k_ranges[i]
+            other_mask = expert_ids_t != i
+            for a_local in range(end_i - start_i):
+                a = start_i + a_local
+                cross_vals = I_matrix[a] * other_mask.float()
+                conflict_vals = torch.clamp(-cross_vals, min=0)
+                conflict_score = conflict_vals.sum().item()
+                if conflict_score > 0:
+                    own_contribution = sigmas[a].item() ** 2
+                    relative_conflict = conflict_score / (own_contribution + 1e-10)
+                    suppression = max(0.0, 1.0 - beta * relative_conflict)
+                    suppression_factors[a] = suppression
+
+        cleaned = torch.zeros_like(vectors)
+        for i in range(N):
+            start_i, end_i = expert_k_ranges[i]
+            suppressed_s = all_sigmas[i] * suppression_factors[start_i:end_i]
+            cleaned[i] = all_us[i] @ torch.diag(suppressed_s) @ all_vs[i]
+
+        n_suppressed = (suppression_factors < 1.0).sum().item()
+        avg_suppression = suppression_factors.mean().item()
+        print(f"  MC: K={K}, suppressed={n_suppressed}/{K} "
+              f"({n_suppressed/K*100:.1f}%), avg_factor={avg_suppression:.3f}")
+        del I_matrix, u_overlap, v_overlap, sigma_outer, U_cat, V_cat
+        return cleaned
+
+    def get_mc_tucker_cf_vector(param_name, vectors, beta=0.5, energy_ratio=0.95, top_k=40):
+        """MC conflict suppression followed by Tucker closed-form."""
+        original_dtype = vectors.dtype
+        vectors = vectors.to(torch.float32)
+        N, m, n = vectors.shape
+
+        # Step 1: MC conflict suppression
+        vectors = suppress_conflicts(vectors, beta=beta, energy_ratio=energy_ratio)
+
+        # Step 2: Build Tucker bases from CLEANED vectors
+        U_pool_list, V_pool_list = [], []
+        for i in range(N):
+            Ui, Si, Vti = torch.linalg.svd(vectors[i], full_matrices=False)
+            k = min(top_k, Si.shape[0])
+            U_pool_list.append(Ui[:, :k])
+            V_pool_list.append(Vti[:k, :].T)
+
+        B, _ = torch.linalg.qr(torch.cat(U_pool_list, dim=1))
+        C, _ = torch.linalg.qr(torch.cat(V_pool_list, dim=1))
+        r2, r3 = B.shape[1], C.shape[1]
+        print(f"  MC-Tucker-CF: r2={r2}, r3={r3}, compression={m*n/(r2*r3):.0f}x")
+
+        # Step 3: wudi2 targets from cleaned vectors
+        average_vector = vectors.mean(dim=0)
+        l2_norms = torch.sum(vectors.reshape(N, -1) ** 2, dim=-1)
+        H = torch.zeros(r3, r3, device=vectors.device, dtype=torch.float32)
+        G = torch.zeros(r2, r3, device=vectors.device, dtype=torch.float32)
+
+        for i in range(N):
+            vector = vectors[i]
+            u, s, v = torch.linalg.svd(vector, full_matrices=True)
+            u2, s2, v2 = torch.linalg.svd(vector - average_vector, full_matrices=False)
+            reduced_index_s = int(s.shape[0] / N)
+            u2_k = u2[:, :reduced_index_s]
+            s2_k = s2[:reduced_index_s]
+            v2_k = v2[:reduced_index_s, :]
+            target_i = u2_k @ torch.diag(s2_k) @ v2_k + average_vector
+            s_mask = torch.zeros_like(s)
+            s_mask[:reduced_index_s] = 1
+            s = s * s_mask
+            v_mask = torch.zeros_like(v)
+            v_mask[:reduced_index_s, :] = 1
+            v = v * v_mask
+            S_matrix = torch.zeros(m, n, device=s.device)
+            min_dim = min(m, n)
+            S_matrix[:min_dim, :min_dim] = torch.diag_embed(s)
+            low_rank_i = S_matrix @ v
+            n_i = l2_norms[i]
+            Z_i = low_rank_i @ C
+            H += Z_i.T @ Z_i / n_i
+            BtT = B.T @ target_i
+            LtZ = low_rank_i.T @ Z_i
+            G += BtT @ LtZ / n_i
+
+        # Step 4: Closed-form solution with Tikhonov regularization
+        reg = 1e-6 * torch.trace(H) / r3
+        H_reg = H + reg * torch.eye(r3, device=H.device, dtype=H.dtype)
+        X_star = G @ torch.linalg.inv(H_reg)
+        result = B @ X_star @ C.T
+
+        # Diagnostics
+        loss = 0.0
+        for i in range(N):
+            vector = vectors[i]
+            u, s, v = torch.linalg.svd(vector, full_matrices=True)
+            u2, s2, v2 = torch.linalg.svd(vector - average_vector, full_matrices=False)
+            reduced_index_s = int(s.shape[0] / N)
+            u2_k = u2[:, :reduced_index_s]
+            s2_k = s2[:reduced_index_s]
+            v2_k = v2[:reduced_index_s, :]
+            target_i = u2_k @ torch.diag(s2_k) @ v2_k + average_vector
+            s_mask = torch.zeros_like(s)
+            s_mask[:reduced_index_s] = 1
+            s = s * s_mask
+            v_mask = torch.zeros_like(v)
+            v_mask[:reduced_index_s, :] = 1
+            v = v * v_mask
+            S_matrix = torch.zeros(m, n, device=s.device)
+            min_dim = min(m, n)
+            S_matrix[:min_dim, :min_dim] = torch.diag_embed(s)
+            low_rank_i = S_matrix @ v
+            proj = result @ low_rank_i.T - target_i @ low_rank_i.T
+            loss += torch.sum(proj ** 2) / l2_norms[i]
+        print(f"  MC-Tucker-CF loss: {loss.item():.6f}")
+
+        return result.detach().to(original_dtype)
+
+    merged_task_vector_dict = {}
+
+    for param_name in models_to_merge_task_vectors[0].task_vector_param_dict:
+        if len(models_to_merge_task_vectors[0].task_vector_param_dict[param_name].shape) == 2 and "lm_head" not in param_name:
+            print(f"Processing {param_name} with shape {models_to_merge_task_vectors[0].task_vector_param_dict[param_name].shape}")
+            values = torch.stack([
+                task_vector.task_vector_param_dict[param_name]
+                for task_vector in models_to_merge_task_vectors
+            ])
+            merging_vector = get_mc_tucker_cf_vector(
+                param_name, values, beta=beta, energy_ratio=energy_ratio, top_k=top_k
+            )
+            merged_task_vector_dict[param_name] = merging_vector
+
+    for param_name in models_to_merge_task_vectors[0].task_vector_param_dict.keys():
+        if param_name not in merged_task_vector_dict:
+            print(f"Using simple averaging for {param_name}")
+            merged_param = models_to_merge_task_vectors[0].task_vector_param_dict[param_name].clone()
+            for i, task_vector in enumerate(models_to_merge_task_vectors[1:], 1):
+                vec = task_vector.task_vector_param_dict[param_name]
+                merged_param += (vec - merged_param) / (i + 1)
+            merged_task_vector_dict[param_name] = merged_param
+
+    merged_task_vector = TaskVector(task_vector_param_dict=merged_task_vector_dict)
+    merged_params = merged_task_vector.combine_with_pretrained_model(
+        pretrained_model=merged_model,
+        scaling_coefficient=scaling_coefficient
+    )
+    return merged_params
+
+
 def merge_models(merge_method="wudi2", scaling_coefficient = 0.1, merged_model_name='default_merged_model', merged_list=[]):
     print("Start merging models...")
     base_model = models['a'].cuda()
@@ -881,95 +1791,96 @@ def merge_models(merge_method="wudi2", scaling_coefficient = 0.1, merged_model_n
     torch.cuda.empty_cache()
     return base_model
 
-#####################################################################
-path_a = 'OpenGVLab/InternVL2_5-1B'
-path_b = 'yongxianwei/InternVL2_5-1B_OCR'
-path_c = 'yongxianwei/InternVL2_5-1B_VQA'
-path_d = 'yongxianwei/InternVL2_5-1B_Geometry'
-path_e = 'yongxianwei/InternVL2_5-1B_Chart'
-path_f = 'yongxianwei/InternVL2_5-1B_Grounding'
+if __name__ == "__main__":
+    #####################################################################
+    path_a = 'OpenGVLab/InternVL2_5-1B'
+    path_b = 'yongxianwei/InternVL2_5-1B_OCR'
+    path_c = 'yongxianwei/InternVL2_5-1B_VQA'
+    path_d = 'yongxianwei/InternVL2_5-1B_Geometry'
+    path_e = 'yongxianwei/InternVL2_5-1B_Chart'
+    path_f = 'yongxianwei/InternVL2_5-1B_Grounding'
 
-tokenizer = AutoTokenizer.from_pretrained(path_a, trust_remote_code=True, use_fast=False)
-models = {
-    'a': AutoModel.from_pretrained(path_a, torch_dtype=torch.float16, trust_remote_code=True).eval(),
-    'b': AutoModel.from_pretrained(path_b, torch_dtype=torch.float16, trust_remote_code=True).eval(),
-    'c': AutoModel.from_pretrained(path_c, torch_dtype=torch.float16, trust_remote_code=True).eval(),
-    'd': AutoModel.from_pretrained(path_d, torch_dtype=torch.float16, trust_remote_code=True).eval(),
-    'e': AutoModel.from_pretrained(path_e, torch_dtype=torch.float16, trust_remote_code=True).eval(),
-    'f': AutoModel.from_pretrained(path_f, torch_dtype=torch.float16, trust_remote_code=True).eval(),
-}
-model = merge_models(merged_model_name='merged_exclude_ocr', merged_list=['c', 'd', 'e', 'f'])
-#####################################################################
-# set the max number of tiles in `max_num`
-pixel_values = load_image('./examples/image1.jpg', max_num=12).to(torch.float16).cuda()
-generation_config = dict(max_new_tokens=1024, do_sample=False)
+    tokenizer = AutoTokenizer.from_pretrained(path_a, trust_remote_code=True, use_fast=False)
+    models = {
+        'a': AutoModel.from_pretrained(path_a, torch_dtype=torch.float16, trust_remote_code=True).eval(),
+        'b': AutoModel.from_pretrained(path_b, torch_dtype=torch.float16, trust_remote_code=True).eval(),
+        'c': AutoModel.from_pretrained(path_c, torch_dtype=torch.float16, trust_remote_code=True).eval(),
+        'd': AutoModel.from_pretrained(path_d, torch_dtype=torch.float16, trust_remote_code=True).eval(),
+        'e': AutoModel.from_pretrained(path_e, torch_dtype=torch.float16, trust_remote_code=True).eval(),
+        'f': AutoModel.from_pretrained(path_f, torch_dtype=torch.float16, trust_remote_code=True).eval(),
+    }
+    model = merge_models(merged_model_name='merged_exclude_ocr', merged_list=['c', 'd', 'e', 'f'])
+    #####################################################################
+    # set the max number of tiles in `max_num`
+    pixel_values = load_image('./examples/image1.jpg', max_num=12).to(torch.float16).cuda()
+    generation_config = dict(max_new_tokens=1024, do_sample=False)
 
-# pure-text conversation
-question = 'Hello, who are you?'
-response, history = model.chat(tokenizer, None, question, generation_config, history=None, return_history=True)
-print(f'User: {question}\nAssistant: {response}')
-
-question = 'Can you tell me a story?'
-response, history = model.chat(tokenizer, None, question, generation_config, history=history, return_history=True)
-print(f'User: {question}\nAssistant: {response}')
-
-# single-image single-round conversation
-question = '<image>\nPlease describe the image shortly.'
-response = model.chat(tokenizer, pixel_values, question, generation_config)
-print(f'User: {question}\nAssistant: {response}')
-
-# single-image multi-round conversation
-question = '<image>\nPlease describe the image in detail.'
-response, history = model.chat(tokenizer, pixel_values, question, generation_config, history=None, return_history=True)
-print(f'User: {question}\nAssistant: {response}')
-
-question = 'Please write a poem according to the image.'
-response, history = model.chat(tokenizer, pixel_values, question, generation_config, history=history, return_history=True)
-print(f'User: {question}\nAssistant: {response}')
-
-# multi-image multi-round conversation, combined images
-pixel_values1 = load_image('./examples/image1.jpg', max_num=12).to(torch.float16).cuda()
-pixel_values2 = load_image('./examples/image2.jpg', max_num=12).to(torch.float16).cuda()
-pixel_values = torch.cat((pixel_values1, pixel_values2), dim=0)
-
-question = '<image>\nDescribe the two images in detail.'
-response, history = model.chat(tokenizer, pixel_values, question, generation_config,
-                            history=None, return_history=True)
-print(f'User: {question}\nAssistant: {response}')
-
-question = 'What are the similarities and differences between these two images.'
-response, history = model.chat(tokenizer, pixel_values, question, generation_config,
-                            history=history, return_history=True)
-print(f'User: {question}\nAssistant: {response}')
-
-# multi-image multi-round conversation, separate images
-pixel_values1 = load_image('./examples/image1.jpg', max_num=12).to(torch.float16).cuda()
-pixel_values2 = load_image('./examples/image2.jpg', max_num=12).to(torch.float16).cuda()
-pixel_values = torch.cat((pixel_values1, pixel_values2), dim=0)
-num_patches_list = [pixel_values1.size(0), pixel_values2.size(0)]
-
-question = 'Image-1: <image>\nImage-2: <image>\nDescribe the two images in detail.'
-response, history = model.chat(tokenizer, pixel_values, question, generation_config,
-                            num_patches_list=num_patches_list,
-                            history=None, return_history=True)
-print(f'User: {question}\nAssistant: {response}')
-
-question = 'What are the similarities and differences between these two images.'
-response, history = model.chat(tokenizer, pixel_values, question, generation_config,
-                            num_patches_list=num_patches_list,
-                            history=history, return_history=True)
-print(f'User: {question}\nAssistant: {response}')
-
-# batch inference, single image per sample
-pixel_values1 = load_image('./examples/image1.jpg', max_num=12).to(torch.float16).cuda()
-pixel_values2 = load_image('./examples/image2.jpg', max_num=12).to(torch.float16).cuda()
-num_patches_list = [pixel_values1.size(0), pixel_values2.size(0)]
-pixel_values = torch.cat((pixel_values1, pixel_values2), dim=0)
-
-questions = ['<image>\nDescribe the image in detail.'] * len(num_patches_list)
-responses = model.batch_chat(tokenizer, pixel_values,
-                            num_patches_list=num_patches_list,
-                            questions=questions,
-                            generation_config=generation_config)
-for question, response in zip(questions, responses):
+    # pure-text conversation
+    question = 'Hello, who are you?'
+    response, history = model.chat(tokenizer, None, question, generation_config, history=None, return_history=True)
     print(f'User: {question}\nAssistant: {response}')
+
+    question = 'Can you tell me a story?'
+    response, history = model.chat(tokenizer, None, question, generation_config, history=history, return_history=True)
+    print(f'User: {question}\nAssistant: {response}')
+
+    # single-image single-round conversation
+    question = '<image>\nPlease describe the image shortly.'
+    response = model.chat(tokenizer, pixel_values, question, generation_config)
+    print(f'User: {question}\nAssistant: {response}')
+
+    # single-image multi-round conversation
+    question = '<image>\nPlease describe the image in detail.'
+    response, history = model.chat(tokenizer, pixel_values, question, generation_config, history=None, return_history=True)
+    print(f'User: {question}\nAssistant: {response}')
+
+    question = 'Please write a poem according to the image.'
+    response, history = model.chat(tokenizer, pixel_values, question, generation_config, history=history, return_history=True)
+    print(f'User: {question}\nAssistant: {response}')
+
+    # multi-image multi-round conversation, combined images
+    pixel_values1 = load_image('./examples/image1.jpg', max_num=12).to(torch.float16).cuda()
+    pixel_values2 = load_image('./examples/image2.jpg', max_num=12).to(torch.float16).cuda()
+    pixel_values = torch.cat((pixel_values1, pixel_values2), dim=0)
+
+    question = '<image>\nDescribe the two images in detail.'
+    response, history = model.chat(tokenizer, pixel_values, question, generation_config,
+                                history=None, return_history=True)
+    print(f'User: {question}\nAssistant: {response}')
+
+    question = 'What are the similarities and differences between these two images.'
+    response, history = model.chat(tokenizer, pixel_values, question, generation_config,
+                                history=history, return_history=True)
+    print(f'User: {question}\nAssistant: {response}')
+
+    # multi-image multi-round conversation, separate images
+    pixel_values1 = load_image('./examples/image1.jpg', max_num=12).to(torch.float16).cuda()
+    pixel_values2 = load_image('./examples/image2.jpg', max_num=12).to(torch.float16).cuda()
+    pixel_values = torch.cat((pixel_values1, pixel_values2), dim=0)
+    num_patches_list = [pixel_values1.size(0), pixel_values2.size(0)]
+
+    question = 'Image-1: <image>\nImage-2: <image>\nDescribe the two images in detail.'
+    response, history = model.chat(tokenizer, pixel_values, question, generation_config,
+                                num_patches_list=num_patches_list,
+                                history=None, return_history=True)
+    print(f'User: {question}\nAssistant: {response}')
+
+    question = 'What are the similarities and differences between these two images.'
+    response, history = model.chat(tokenizer, pixel_values, question, generation_config,
+                                num_patches_list=num_patches_list,
+                                history=history, return_history=True)
+    print(f'User: {question}\nAssistant: {response}')
+
+    # batch inference, single image per sample
+    pixel_values1 = load_image('./examples/image1.jpg', max_num=12).to(torch.float16).cuda()
+    pixel_values2 = load_image('./examples/image2.jpg', max_num=12).to(torch.float16).cuda()
+    num_patches_list = [pixel_values1.size(0), pixel_values2.size(0)]
+    pixel_values = torch.cat((pixel_values1, pixel_values2), dim=0)
+
+    questions = ['<image>\nDescribe the image in detail.'] * len(num_patches_list)
+    responses = model.batch_chat(tokenizer, pixel_values,
+                                num_patches_list=num_patches_list,
+                                questions=questions,
+                                generation_config=generation_config)
+    for question, response in zip(questions, responses):
+        print(f'User: {question}\nAssistant: {response}')

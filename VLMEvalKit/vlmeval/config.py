@@ -243,7 +243,49 @@ internvl_series = {
     'merge_wudi2_exclude_chart': partial(InternVLChat, model_path='/data/shichao/data/InternVL_merged/merged_exclude_chart', version='V2.0'),
     
     'internvl_wudi2_exclude_chart_add': partial(InternVLChat, model_path='/data/shichao/data/InternVL_merged/internvl_wudi2_exclude_chart_add', version='V2.0'),
+    'internvl_wudi2_exclude_vqa_add': partial(InternVLChat, model_path='/data/shichao/data/InternVL_merged/internvl_wudi2_exclude_vqa_add', version='V2.0'),
     
+    # remove * then add *
+    'internvl_wudi2_exclude_add_chart': partial(InternVLChat, model_path='/data/shichao/data/InternVL_merged/internvl_wudi2_exclude_add_chart', version='V2.0'),
+    'internvl_wudi2_exclude_add_vqa': partial(InternVLChat, model_path='/data/shichao/data/InternVL_merged/internvl_wudi2_exclude_add_vqa', version='V2.0'),
+
+    # ETVD merge experiments
+    'etvd_merge_all5': partial(InternVLChat, model_path='/data/shichao/data/InternVL_merged/etvd_merge_all5', version='V2.0'),
+    'ta_merge_all5': partial(InternVLChat, model_path='/data/shichao/data/InternVL_merged/ta_merge_all5', version='V2.0'),
+
+    # Scaling sweep
+    'ta_s01_all5': partial(InternVLChat, model_path='/data/shichao/data/InternVL_merged/ta_s01_all5', version='V2.0'),
+    'ta_s02_all5': partial(InternVLChat, model_path='/data/shichao/data/InternVL_merged/ta_s02_all5', version='V2.0'),
+    'ta_s03_all5': partial(InternVLChat, model_path='/data/shichao/data/InternVL_merged/ta_s03_all5', version='V2.0'),
+    'ta_s05_all5': partial(InternVLChat, model_path='/data/shichao/data/InternVL_merged/ta_s05_all5', version='V2.0'),
+    'etvd_s01_all5': partial(InternVLChat, model_path='/data/shichao/data/InternVL_merged/etvd_s01_all5', version='V2.0'),
+    'etvd_s02_all5': partial(InternVLChat, model_path='/data/shichao/data/InternVL_merged/etvd_s02_all5', version='V2.0'),
+    'etvd_s03_all5': partial(InternVLChat, model_path='/data/shichao/data/InternVL_merged/etvd_s03_all5', version='V2.0'),
+    'etvd_s05_all5': partial(InternVLChat, model_path='/data/shichao/data/InternVL_merged/etvd_s05_all5', version='V2.0'),
+    'etvd_norm_mean_s10_all5': partial(InternVLChat, model_path='/data/shichao/data/InternVL_merged/etvd_norm_mean_s10_all5', version='V2.0'),
+    'etvd_norm_median_s10_all5': partial(InternVLChat, model_path='/data/shichao/data/InternVL_merged/etvd_norm_median_s10_all5', version='V2.0'),
+    'ta_norm_mean_s10_all5': partial(InternVLChat, model_path='/data/shichao/data/InternVL_merged/ta_norm_mean_s10_all5', version='V2.0'),
+    'etvd_v2_s01_all5': partial(InternVLChat, model_path='/data/shichao/data/InternVL_merged/etvd_v2_s01_all5', version='V2.0'),
+    'ta_no_geometry_s01': partial(InternVLChat, model_path='/data/shichao/data/InternVL_merged/ta_no_geometry_s01', version='V2.0'),
+    'ta_no_geometry_s015': partial(InternVLChat, model_path='/data/shichao/data/InternVL_merged/ta_no_geometry_s015', version='V2.0'),
+    'ta_no_geometry_s02': partial(InternVLChat, model_path='/data/shichao/data/InternVL_merged/ta_no_geometry_s02', version='V2.0'),
+    'ta_weighted_v1': partial(InternVLChat, model_path='/data/shichao/data/InternVL_merged/ta_weighted_v1', version='V2.0'),
+
+    # Route A/C experiments (Section 11)
+    'mc_wudi2_b05': partial(InternVLChat, model_path='/data/shichao/data/InternVL_merged/mc_wudi2_b05', version='V2.0'),
+    'tucker_wudi2_k40': partial(InternVLChat, model_path='/data/shichao/data/InternVL_merged/tucker_wudi2_k40', version='V2.0'),
+    'anova_wudi2': partial(InternVLChat, model_path='/data/shichao/data/InternVL_merged/anova_wudi2', version='V2.0'),
+    # Tucker closed-form experiments
+    'tucker_cf_k40': partial(InternVLChat, model_path='/data/shichao/data/InternVL_merged/tucker_cf_k40', version='V2.0'),
+    'tucker_cf_k60': partial(InternVLChat, model_path='/data/shichao/data/InternVL_merged/tucker_cf_k60', version='V2.0'),
+    'tucker_cf_k80': partial(InternVLChat, model_path='/data/shichao/data/InternVL_merged/tucker_cf_k80', version='V2.0'),
+    'mc_tucker_cf_k40': partial(InternVLChat, model_path='/data/shichao/data/InternVL_merged/mc_tucker_cf_k40', version='V2.0'),
+    'tucker_adam_k60': partial(InternVLChat, model_path='/data/shichao/data/InternVL_merged/tucker_adam_k60', version='V2.0'),
+    'mc_tucker_cf_k60': partial(InternVLChat, model_path='/data/shichao/data/InternVL_merged/mc_tucker_cf_k60', version='V2.0'),
+    # Baselines
+    'ties_s01': partial(InternVLChat, model_path='/data/shichao/data/InternVL_merged/ties_s01', version='V2.0'),
+    'dare_ta_s01': partial(InternVLChat, model_path='/data/shichao/data/InternVL_merged/dare_ta_s01', version='V2.0'),
+
     'InternVL2_5-1B_mixed': partial(InternVLChat, model_path='/efs/wyx/InternVL/internvl_chat/work_dirs/internvl_chat_v2_5/internvl2_5_1b_dynamic_res_2nd_finetune_full_mixed/', version='V2.0'),
     'InternVL2_5-1B': partial(InternVLChat, model_path='OpenGVLab/InternVL2_5-1B', version='V2.0'),
     'InternVL2_5-2B': partial(InternVLChat, model_path='OpenGVLab/InternVL2_5-2B', version='V2.0'),
